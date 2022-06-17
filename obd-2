@@ -1,0 +1,237 @@
+/*
+
+***AUTHOR:ATHUL
+
+***THIS CODE CAN BE USED FOR STANDARD AS WELL AS EXTENDED OBD2
+
+
+
+
+
+
+
+
+*/
+
+#include <mcp_can.h>
+#include <SPI.h>
+
+#include <avr/io.h>
+#include <util/delay.h>
+
+#include <EEPROM.h>
+#include <avr/wdt.h>
+int standard =1;
+int flag=0;
+
+ int LISTEN_ID =0;
+ int REPLY_ID = 0;
+ unsigned long FUNCTIONAL_ID=0;
+
+int one_time=0;
+int error_flag=0;
+// CAN TX Variables
+unsigned long prevTx = 0;
+unsigned int invlTx = 1000;
+unsigned long prev_change = 0;
+unsigned int invl_change = 5000;
+byte txData[] = {0x02,0x01,0x0D,0x55,0x55,0x55,0x55,0x55};
+
+// CAN RX Variables
+unsigned long rxID;
+byte dlc;
+byte rxBuf[8];
+char msgString[128];                        // Array to store serial string
+volatile int speeds=0;
+int Pwmpin=9;//Pwm Output Pin
+int freq=0;
+int dummy_var=0;
+int dummy2=0;
+int temp=0;
+int var1=0;
+int var2=0;
+bool toggle=0;
+
+// CAN Interrupt and Chip Select Pins
+#define CAN0_INT 2                              /* Set INT to pin 2 (This rarely changes)   */
+MCP_CAN CAN0(10);                                /* Set CS to pin 9 (Old shields use pin 10) */
+
+
+void setup(){
+
+
+wdt_enable(WDTO_2S);
+  
+standard=1;
+flag=EEPROM.read(0);
+one_time=EEPROM.read(5);
+if(flag==1){
+  standard=0;
+  
+  }
+
+ EEPROM.write(0, 0);
+
+
+
+if (standard == 1)
+  
+   FUNCTIONAL_ID= 0x7DF;
+else
+ 
+   FUNCTIONAL_ID = 0x98DB33F1;
+
+
+
+pinMode(Pwmpin, OUTPUT);//Pwm pin as Output
+
+TCCR1A=_BV(COM1A1)|_BV(COM1B1);//Non-inverted Mode
+TCCR1B=_BV(WGM13)|_BV(CS11)|_BV(CS10);//Prescalar 8
+  
+
+  Serial.begin(115200);
+  Serial.println("hiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii");
+  while(!Serial);
+ 
+  // Initialize MCP2515 running at 16MHz with a baudrate of 500kb/s and the masks and filters disabled.
+  if(CAN0.begin(MCP_STDEXT, CAN_500KBPS, MCP_8MHZ) == CAN_OK)
+    Serial.println("MCP2515 Initialized Successfully!");
+  else{
+    Serial.println("Error Initializing MCP2515... Permanent failure!  Check your code & connections");
+   // while(1);
+  }
+
+//
+//  // Allow all Standard IDs
+//  CAN0.init_Mask(0,0x00000000);                // Init first mask...
+//  CAN0.init_Filt(0,0x00000000);                // Init first filter...
+//  CAN0.init_Filt(1,0x00000000);                // Init second filter...
+//  // Allow all Extended IDs
+//  CAN0.init_Mask(1,0x80000000);                // Init second mask...
+//  CAN0.init_Filt(2,0x80000000);                // Init third filter...
+//  CAN0.init_Filt(3,0x80000000);                // Init fourth filter...
+//  CAN0.init_Filt(4,0x80000000);                // Init fifth filter...
+//  CAN0.init_Filt(5,0x80000000);                // Init sixth filter...
+
+if (standard == 1){
+  // Standard ID Filters
+  CAN0.init_Mask(0,0x7F00000);                // Init first mask...
+  CAN0.init_Filt(0,0x7DF0000);                // Init first filter...
+  CAN0.init_Filt(1,0x7E10000);                // Init second filter...
+
+  CAN0.init_Mask(1,0x7F00000);                // Init second mask...
+  CAN0.init_Filt(2,0x7DF0000);                // Init third filter...
+  CAN0.init_Filt(3,0x7E10000);                // Init fourth filter...
+  CAN0.init_Filt(4,0x7DF0000);                // Init fifth filter...
+  CAN0.init_Filt(5,0x7E10000);                // Init sixth filter...
+}
+else
+{
+  // Extended ID Filters
+  CAN0.init_Mask(0,0x90FF0000);                // Init first mask...
+  CAN0.init_Filt(0,0x90DA0000);                // Init first filter...
+  CAN0.init_Filt(1,0x90DB0000);                // Init second filter...
+
+  CAN0.init_Mask(1,0x90FF0000);                // Init second mask...
+  CAN0.init_Filt(2,0x90DA0000);                // Init third filter...
+  CAN0.init_Filt(3,0x90DB0000);                // Init fourth filter...
+  CAN0.init_Filt(4,0x90DA0000);                // Init fifth filter...
+  CAN0.init_Filt(5,0x90DB0000);                // Init sixth filter...
+}
+Serial.println(standard);
+  CAN0.setMode(MCP_NORMAL);                      // Set operation mode to normal so the MCP2515 sends acks to received data.
+
+  // Having problems?  ======================================================
+  // If you are not receiving any messages, uncomment the setMode line below
+  // to test the wiring between the Ardunio and the protocol controller.
+  // The message that this sketch sends should be instantly received.
+  // ========================================================================
+  //CAN0.setMode(MCP_LOOPBACK);
+
+  pinMode(CAN0_INT, INPUT);                          // Configuring pin for /INT input
+ 
+  Serial.println("Simple CAN OBD-II PID Request");
+
+EEPROM.write(5, 0);
+  
+}
+
+void loop(){
+ speeds=30;
+var1=2*64*speeds;
+var2=16000000/var1;
+  
+ICR1=var2;//variable Frequency
+OCR1A=var2/2;
+ 
+
+
+  if(!digitalRead(CAN0_INT)){
+    // If CAN0_INT pin is low, read receive buffer
+ 
+    CAN0.readMsgBuf(&rxID, &dlc, rxBuf);             // Get CAN data
+  
+    // Display received CAN data as we receive it.
+    if((rxID & 0x80000000) == 0x80000000)     // Determine if ID is standard (11 bits) or extended (29 bits)
+      sprintf(msgString, "Extended ID: 0x%.8lX  DLC: %1d  Data:", (rxID & 0x1FFFFFFF), dlc);
+    else
+      sprintf(msgString, "Standard ID: 0x%.3lX       DLC: %1d  Data:", rxID, dlc);
+ 
+   // Serial.print(rxID);
+    
+ 
+    if((rxID & 0x40000000) == 0x40000000){    // Determine if message is a remote request frame.
+      sprintf(msgString, " REMOTE REQUEST FRAME");
+      Serial.print(msgString);
+    } else {
+      for(byte i = 0; i<dlc; i++){
+        sprintf(msgString, " 0x%.2X", rxBuf[i]);
+        Serial.print(msgString);
+      }
+    }
+
+    speeds=rxBuf[3];
+  // frequency(speeds);
+    Serial.print("speeds :");
+      Serial.print(speeds);
+   Serial.println();
+    //frequency(speeds);
+  }
+//EEPROM.write(5, 0);
+wdt_reset();
+error_flag=0;
+//*********************************************************************************************
+if((millis() - prev_change) >= invl_change){
+    prev_change = millis();
+if((rxBuf[1]!=65)&&(rxBuf[2]!=13)&&(one_time==0)){
+  toggle=EEPROM.read(6);
+  toggle = !toggle;
+  EEPROM.write(6, toggle);
+  one_time=0;
+  EEPROM.write(5, one_time);
+  
+  EEPROM.write(0, toggle);
+  delay(100);
+  while(1){
+    //Serial.println("hi");
+    }
+  }
+}
+//****************************************************************************************************
+
+//Serial.println(rxBuf[1]);
+ 
+  /* Every 1000ms (One Second) send a request for PID 00           *
+   * This PID responds back with 4 data bytes indicating the PIDs  *
+   * between 0x01 and 0x20 that are supported by the vehicle.      */
+  if((millis() - prevTx) >= invlTx){
+    prevTx = millis();
+    if((CAN0.sendMsgBuf(FUNCTIONAL_ID, 8, txData) == CAN_OK)){
+
+      Serial.println("Message Sent Successfully!");
+    } else {
+      Serial.println("Error Sending Message...");
+      error_flag=1;
+    }
+  }
+}
